@@ -990,7 +990,7 @@ Regular guest endpoints  →  no blocklist, short expiry is fine
 Admin / payment endpoints  →  check blocklist on every request
 ```
 
-#### Types of Logout
+### Types of Logout
 
 Not all logouts are equal. You need to handle several scenarios:
 
