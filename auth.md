@@ -123,18 +123,45 @@ MD5("sunshine99")  →  "a3f2bc..."   ✓ fast to compute
 
 On login, instead of decrypting, you just hash what the user typed and compare.
 
-**Fatal problem:** Rainbow Tables. Because `MD5("sunshine99")` always produces the same output, attackers precomputed massive lookup tables of common passwords and their hashes.
+```
+user types:       "sunshine99"
+hash it:          "a3f2bc..."
+compare to DB:    "a3f2bc..."  ✓ match → logged in
+```
+Sounds good. But there's a fatal problem.
+
+### The Problem with Plain Hashing — Rainbow Tables
+
+Because `MD5("sunshine99")` always produces the same output, attackers precomputed massive lookup tables of common passwords and their hashes. These are called rainbow tables.
+
+```
+"password123"  →  "482c811d..."
+"sunshine99"   →  "a3f2bc..."
+"iloveyou"     →  "f25a2fc..."
+... millions of entries
+```
+
+They leak your DB, look up every hash, done. No computing needed.
 
 ### The Fix — Salting
-
-A **salt** is a random string generated per user, added to the password before hashing.
+A salt is a random string generated per user, added to the password before hashing.
 
 ```
 salt    =  "xQ7$kL"   (random, unique per user)
 hash    =  MD5("sunshine99" + "xQ7$kL")  →  "9f3a1d..."
 ```
 
-You store both the salt and the hash. Rainbow tables are now useless.
+You store both the salt and the hash. On login:
+
+```
+user types:   "sunshine99"
+fetch salt:   "xQ7$kL"
+hash:         MD5("sunshine99" + "xQ7$kL")  →  "9f3a1d..."
+compare:      matches ✓
+```
+
+Rainbow tables are now useless — they'd need a separate table for every possible salt.
+
 
 ### But MD5 and SHA are Still Wrong — Speed is the Enemy
 
