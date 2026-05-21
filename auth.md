@@ -165,11 +165,15 @@ Rainbow tables are now useless — they'd need a separate table for every possib
 
 ### But MD5 and SHA are Still Wrong — Speed is the Enemy
 
-MD5 and SHA-256 were designed to be fast — millions of hashes per second on modern hardware. An attacker with a GPU can try billions of password guesses per second against a stolen hash.
+MD5 and SHA-256 were designed to be fast — millions of hashes per second on modern hardware. For file checksums, great. For passwords, catastrophic.
+An attacker with a GPU can try billions of password guesses per second against a stolen hash. Even with a salt, a weak password like `sunshine99` falls in seconds.
+
 
 ### The Right Tool — bcrypt
 
-bcrypt was designed specifically for passwords. It has a **cost factor** that controls how much computation is needed:
+bcrypt was designed specifically for passwords. It has two key properties:
+1. It's intentionally slow
+It has a cost factor (also called work factor) that controls how much computation is needed.
 
 ```
 cost = 10  →  ~100ms per hash
@@ -177,15 +181,17 @@ cost = 12  →  ~400ms per hash
 cost = 14  →  ~1.5s per hash
 ```
 
-100ms feels instant to a user logging in. For an attacker trying a billion guesses — suddenly impossible.
-
-**The salt is built in.** bcrypt generates and stores the salt automatically:
+100ms feels instant to a user logging in. But for an attacker trying a billion guesses — suddenly impossible.
+2. The salt is built in
+bcrypt generates and stores the salt automatically. The output is self-contained:
 
 ```
 bcrypt("sunshine99")  →  "$2b$10$xQ7kL...hashed..."
                               ↑    ↑
                            algo  cost factor + salt + hash all in one string
 ```
+
+You store this single string. On login, bcrypt knows how to extract the salt and re-verify.
 
 ### Summary
 
