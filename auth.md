@@ -309,23 +309,35 @@ A common pattern for SPAs and mobile apps: store the token in an HttpOnly cookie
 
 ## Layer 1, Topic 3 — What a JWT Is
 
-**One sentence:** A JWT (JSON Web Token) is a self-contained, signed package of claims that the server issues and the client presents on every request.
+**One Sentence Definition**
+A JWT (JSON Web Token) is a **self-contained**, signed package of claims that the server issues and the client presents on every request.
+"Self-contained" is the key word. The token is the identity — no database lookup needed.
 
-### Structure
+**What It Looks Like**
+A JWT looks like this:
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQyLCJlbWFpbCI6Im1hcmlvQGV4YW1wbGUuY29tIiwicm9sZSI6Imd1ZXN0IiwiaWF0IjoxNzE2MjM5MDIyLCJleHAiOjE3MTYyNDI2MjJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+```
+
+Three base64-encoded chunks separated by dots:
 
 ```
 HEADER . PAYLOAD . SIGNATURE
 ```
 
 **Chunk 1 — Header**
+Describes the token itself — what type it is and what algorithm was used to sign it.
 ```json
 {
   "alg": "HS256",
   "typ": "JWT"
 }
 ```
+`HS256` means HMAC + SHA-256. We'll come back to what that means.
+
 
 **Chunk 2 — Payload**
+The actual data. These fields are called claims.
 ```json
 {
   "userId": 42,
@@ -336,9 +348,19 @@ HEADER . PAYLOAD . SIGNATURE
 }
 ```
 
-> The payload is **base64-encoded — not encrypted**. Anyone can decode and read it. Never put passwords, card numbers, or secrets in a JWT payload.
+| Claim | Meaning |
+|---|---|
+| `userId` | Your custom data |
+| `email` | Your custom data |
+| `role` | Your custom data |
+| `iat` | *Issued at* — when the token was created (Unix timestamp) |
+| `exp` | *Expires at* — when the token dies |
+
+`iat` and `exp` are standard JWT claims. Everything else is yours to define.
+Important: the payload is just base64-encoded — not encrypted. Anyone can decode and read it. Never put passwords, card numbers, or secrets in a JWT payload.
 
 **Chunk 3 — Signature**
+This is what makes the token trustworthy.
 ```
 HMAC-SHA256(
   base64(header) + "." + base64(payload),
@@ -346,9 +368,22 @@ HMAC-SHA256(
 )
 ```
 
+The server takes the header and payload, runs them through a hashing algorithm using a secret key only the server knows, and appends the result.
+
+```
+header.payload  →  signed with SECRET_KEY  →  signature
+```
+
 ### Why the Signature Matters
 
-If an attacker tampers with the payload and re-encodes it, the server recomputes the signature:
+Imagine a user decodes their token, changes `"role"`: `"guest"` to `"role"`: `"admin"`, re-encodes it, and sends it.
+The server receives it and computes:
+
+```
+HMAC-SHA256(tampered_header.tampered_payload, SECRET_KEY)
+```
+
+The result won't match the signature that came with the token — because the attacker doesn't have `SECRET_KEY`.
 
 ```
 expected signature:  "SflKxwRJ..."
@@ -384,7 +419,9 @@ The payload is **readable by anyone, but modifiable by no one** (without the sec
 | | HS256 (Symmetric) | RS256 (Asymmetric) |
 |---|---|---|
 | Signing key | One secret key | Private key signs, public key verifies |
+| Who can verify | Only parties with the secret | Anyone with the public key |
 | Best for | Single server / monolith | Microservices, third-party verification |
+| Risk | Secret key leak = full compromise | Private key stays on auth server only |
 
 ### Access Token vs Refresh Token
 
@@ -392,6 +429,21 @@ The payload is **readable by anyone, but modifiable by no one** (without the sec
 - **Refresh token** — long-lived (days/weeks), used only to get a new access token
 
 ---
+
+Summary
+
+* A JWT is three base64 chunks: `header.payload.signature`
+* The payload carries claims — userId, role, expiry — readable by anyone
+* The signature is a cryptographic proof the payload wasn't tampered with
+* The server never stores the token — it just re-verifies the signature on every request
+* Short expiry = safer, but needs refresh tokens to stay usable
+
+That completes Layer 1 — Foundations. You now understand:
+
+* ✅ How passwords are safely stored (bcrypt)
+* ✅ How HTTP carries identity (cookies vs. tokens)
+* ✅ What a JWT is and why it can be trusted
+
 
 ## Layer 2, Topic 4 — Registration & Login Flow
 
