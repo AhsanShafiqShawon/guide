@@ -633,7 +633,7 @@ attacker tries:
   sunshine1, sunshine2, sunshine3 ... sunshine99  →  ✓ logged in
 ```
 
-Defenses
+#### Defenses:
 
 | Technique | How it works |
 |---|---|
