@@ -24,20 +24,40 @@ Now adding **Auth** from zero knowledge.
 ### Why does miniAgoda need Auth?
 
 Right now the system has no concept of who is making a request. Auth lets you:
+
 - Tie a booking to a user ("my bookings")
 - Protect payment/refund endpoints (only the owner or an admin can trigger a refund)
 - Support roles — guest, hotel manager, admin
 
+
 ### The Core Flow (Email + Password)
+Here's the most fundamental auth flow:
 
 **Register**
-- User sends email + password → Hash the password (bcrypt/argon2) → Store user in DB
+
+```
+User sends email + password
+→ Hash the password (bcrypt/argon2)
+→ Store user in DB
+```
 
 **Login**
-- User sends email + password → Look up user by email → Compare password against stored hash → Issue a token (JWT or session)
+
+```
+User sends email + password
+→ Look up user by email
+→ Compare password against stored hash
+→ Issue a token (JWT or session)
+```
 
 **Authenticated Request**
-- User sends token with every request → Server verifies token → Attaches user identity to the request → Handler logic can now check permissions
+User sends token with every request
+
+```
+→ Server verifies token
+→ Attaches user identity to the request
+→ Handler logic can now check permissions
+```
 
 ### The Big Decision: Sessions vs. JWT
 
