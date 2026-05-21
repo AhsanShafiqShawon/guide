@@ -591,7 +591,7 @@ Both paths now take ~400ms. No information leaked.
 
 #### Step 2 — Compare Password
 
-```
+```java
 boolean match = BCrypt.checkpw(plaintext, storedHash);
 // BCrypt extracts the salt from storedHash automatically
 // returns true or false
@@ -599,7 +599,7 @@ boolean match = BCrypt.checkpw(plaintext, storedHash);
 
 #### Step 3 — Sign the JWT
 
-```
+```java
 String accessToken = Jwts.builder()
     .claim("userId", user.getId())
     .claim("email",  user.getEmail())
