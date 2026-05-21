@@ -452,6 +452,7 @@ That completes Layer 1 — Foundations. You now understand:
 * ✅ How HTTP carries identity (cookies vs. tokens)
 * ✅ What a JWT is and why it can be trusted
 
+---
 
 ## Layer 2, Topic 4 — Registration & Login Flow
 
@@ -681,7 +682,7 @@ The token middleware sits in front of everything — which is exactly Topic 7: P
 * Hash with bcrypt cost 12, never log plaintext passwords
 * Rate limit login endpoints — they will be attacked
 
-
+---
 
 ## Layer 2, Topic 5 — Refresh Tokens
 
