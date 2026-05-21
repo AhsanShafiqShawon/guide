@@ -428,10 +428,13 @@ The payload is **readable by anyone, but modifiable by no one** (without the sec
 | Best for | Single server / monolith | Microservices, third-party verification |
 | Risk | Secret key leak = full compromise | Private key stays on auth server only |
 
-### Access Token vs Refresh Token
+### The Expiry Problem
 
-- **Access token** — short-lived (15min–1hr), used on every request
-- **Refresh token** — long-lived (days/weeks), used only to get a new access token
+Short-lived tokens (15 min, 1 hour) are safer — if stolen, they expire quickly. But that means the user gets logged out constantly.
+The solution is refresh tokens — which is all of Topic 5. For now, just know:
+
+* Access token — short-lived (15min–1hr), used on every request
+* Refresh token — long-lived (days/weeks), used only to get a new access token
 
 ---
 
@@ -452,7 +455,12 @@ That completes Layer 1 — Foundations. You now understand:
 
 ## Layer 2, Topic 4 — Registration & Login Flow
 
-### Registration — The Happy Path
+### Overview
+This is where the theory becomes a real system. Registration and login are the most attacked endpoints in any application — so the details matter a lot.
+
+### Registration Flow
+
+#### The Happy Path
 
 ```
 Client                          Server
@@ -468,41 +476,62 @@ Client                          Server
   │←───────────────────────────── │
 ```
 
-**Step 1 — Input Validation**
-- Email: present? valid format? max length?
-- Password: present? min 8 chars? **max 72 chars** (bcrypt silently truncates beyond this)
+#### Step 1 — Input Validation
 
-**Step 2 — Check Email Uniqueness**
+Before touching the database, validate everything:
 
-Use neutral messaging to prevent account enumeration:
+```
+email:
+  ✓ present?
+  ✓ valid format?
+  ✓ max length? (prevent DB overflow attacks)
+
+password:
+  ✓ present?
+  ✓ minimum length? (8+ chars)
+  ✓ maximum length? (72 chars — bcrypt silently truncates beyond this)
+```
+
+The 72-char bcrypt limit is a real gotcha. A user sets a 200-char password, feels secure, but bcrypt only hashed the first 72 chars. Most developers don't know this.
+
+
+#### Step 2 — Check Email Uniqueness
+
+```
+SELECT id FROM users WHERE email = $1
+```
+
+If found → return error. But how you return it matters.
+
 ```
 ❌  "This email is already registered"
 ✓   "If this email is available, you'll receive a confirmation"
 ```
 
-**Step 3 — Hash the Password**
+The first response lets attackers enumerate which emails have accounts — useful for targeted attacks or privacy violations. The second reveals nothing. This is called account enumeration protection and is especially important if your users are hotel guests who may want privacy.
+
+
+#### Step 3 — Hash the Password
 
 ```java
 String hash = passwordEncoder.encode(password);
 // BCryptPasswordEncoder with cost factor 12 = ~400ms
 ```
 
-Never log the plaintext password anywhere.
+Never log the plaintext password anywhere. Not in debug logs, not in error traces.
 
-**Step 4 — DB Schema**
+#### Step 4 — Store in DB
+
+Minimal user record at registration:
 
 ```sql
-CREATE TABLE users (
-  id            SERIAL PRIMARY KEY,
-  email         VARCHAR(255) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  role          VARCHAR(50) DEFAULT 'guest',
-  created_at    TIMESTAMP DEFAULT NOW(),
-  last_login_at TIMESTAMP
-);
+INSERT INTO users (email, password_hash, role, created_at)
+VALUES ($1, $2, 'guest', NOW())
 ```
 
-### Login — The Happy Path
+### Login Flow
+
+#### The Happy Path
 
 ```
 Client                          Server
@@ -519,6 +548,14 @@ Client                          Server
   │←───────────────────────────── │
 ```
 
+#### Step 1 — Find User by Email
+
+```sql
+SELECT id, email, password_hash, role FROM users WHERE email = $1
+```
+
+If no user found — do not return immediately. This is subtle but critical.
+
 ### The Timing Attack Problem
 
 If you return early when a user is not found, attackers can time the response to enumerate valid emails:
@@ -534,6 +571,8 @@ if (!match) {
     return error("Invalid credentials"); // slow ~400ms — reveals email exists
 }
 ```
+An attacker can time the response. Fast response = email doesn't exist. Slow response = email exists, wrong password. You've leaked information through timing alone.
+The fix:
 
 ```java
 // ✅ CORRECT — constant time
@@ -548,7 +587,34 @@ if (!match) {
 }
 ```
 
+Both paths now take ~400ms. No information leaked.
+
+#### Step 2 — Compare Password
+
+```
+boolean match = BCrypt.checkpw(plaintext, storedHash);
+// BCrypt extracts the salt from storedHash automatically
+// returns true or false
+```
+
+#### Step 3 — Sign the JWT
+
+```
+String accessToken = Jwts.builder()
+    .claim("userId", user.getId())
+    .claim("email",  user.getEmail())
+    .claim("role",   user.getRole())
+    .issuedAt(new Date())
+    .expiration(new Date(System.currentTimeMillis() + 15 * 60 * 1000))
+    .signWith(Keys.hmacShaKeyFor(SECRET_KEY.getBytes()))
+    .compact();
+```
+
+Keep the payload small. Only what middleware will actually need on every request. Don't stuff in address, phone number, preferences — those can be fetched when needed.
+
 ### Error Messages — The Golden Rule
+
+Never tell the user which part was wrong:
 
 ```
 ❌  "No account found with that email"
@@ -556,9 +622,18 @@ if (!match) {
 ✓   "Invalid email or password"
 ```
 
-Same message, always, regardless of which credential failed.
+Same message, always, regardless of whether email or password failed. Otherwise attackers can confirm which emails have accounts.
 
 ### Brute Force Protection
+
+Login endpoints are hammered constantly. Without protection:
+
+```
+attacker tries:
+  sunshine1, sunshine2, sunshine3 ... sunshine99  →  ✓ logged in
+```
+
+Defenses
 
 | Technique | How it works |
 |---|---|
@@ -568,6 +643,45 @@ Same message, always, regardless of which credential failed.
 | CAPTCHA | Trigger after N failures |
 
 ---
+
+For miniAgoda, rate limiting per IP + per email is the minimum. Account lockout needs care — it can be abused to lock out legitimate users by deliberately failing their login repeatedly.
+
+#### What the DB Schema Looks Like
+
+```sql
+CREATE TABLE users (
+  id            SERIAL PRIMARY KEY,
+  email         VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  role          VARCHAR(50) DEFAULT 'guest',
+  created_at    TIMESTAMP DEFAULT NOW(),
+  last_login_at TIMESTAMP
+);
+```
+
+#### How This Connects to miniAgoda
+
+```
+POST /auth/register  →  creates user
+POST /auth/login     →  returns { accessToken, refreshToken }
+
+All existing endpoints now need the access token:
+  POST /bookings       →  requires auth, ties booking to userId
+  POST /payments       →  requires auth, verifies booking owner
+  POST /refunds        →  requires auth, verifies booking owner
+```
+
+The token middleware sits in front of everything — which is exactly Topic 7: Protecting routes.
+
+#### Summary
+
+* Validate input before touching the DB — including bcrypt's 72-char limit
+* Use constant-time comparisons to prevent timing attacks
+* Never reveal which credential was wrong
+* Hash with bcrypt cost 12, never log plaintext passwords
+* Rate limit login endpoints — they will be attacked
+
+
 
 ## Layer 2, Topic 5 — Refresh Tokens
 
