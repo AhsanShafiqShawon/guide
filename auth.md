@@ -93,7 +93,7 @@ For a hotel booking API like miniAgoda, **JWT** is the common choice — but it 
 ## Layer 1, Topic 1 — How Passwords Should Be Stored
 
 ### The Wrong Way First
-Let's say a user registers with the password sunshine99. The naive approach:
+Let's say a user registers with the password `sunshine99`. The naive approach:
 
 ```
 store in DB:  password = "sunshine99"
