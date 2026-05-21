@@ -77,27 +77,27 @@ For a hotel booking API like miniAgoda, **JWT** is the common choice — but it 
 
 ### Layer 1 — Foundations
 > *Concepts that everything else builds on*
-- How passwords should be stored — hashing, salting, bcrypt
-- How HTTP carries identity — cookies vs. headers, stateless vs. stateful
-- What a JWT is — structure, signing, verification, expiry
+1. How passwords should be stored — hashing, salting, bcrypt
+2. How HTTP carries identity — cookies vs. headers, stateless vs. stateful
+3. What a JWT is — structure, signing, verification, expiry
 
 ### Layer 2 — Core Implementation
 > *Building the actual auth system*
-- Registration & Login flow — input validation, error handling, security gotchas
-- Refresh tokens — why access tokens expire fast, how rotation works
-- Logout & token revocation — harder than it sounds with JWT
+4. Registration & Login flow — input validation, error handling, security gotchas
+5. Refresh tokens — why access tokens expire fast, how rotation works
+6. Logout & token revocation — harder than it sounds with JWT
 
 ### Layer 3 — Authorization
 > *Who can do what*
-- Protecting routes — middleware pattern
-- Resource ownership — "can this user cancel this booking?"
-- Roles & permissions — guest, hotel manager, admin
+7. Protecting routes — middleware pattern
+8. Resource ownership — "can this user cancel this booking?"
+9. Roles & permissions — guest, hotel manager, admin
 
 ### Layer 4 — Real World
 > *What production systems actually deal with*
-- OAuth / Social login — Login with Google
-- Common attacks & defenses — brute force, CSRF, token theft
-- Fitting Auth into miniAgoda — wiring it into Search, Booking, Payment
+10. OAuth / Social login — Login with Google
+11. Common attacks & defenses — brute force, CSRF, token theft
+12. Fitting Auth into miniAgoda — wiring it into Search, Booking, Payment
 
 ---
 
