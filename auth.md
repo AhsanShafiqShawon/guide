@@ -685,6 +685,29 @@ The token middleware sits in front of everything — which is exactly Topic 7: P
 
 ## Layer 2, Topic 5 — Refresh Tokens
 
+### Why Access Tokens Expire Fast
+
+Recall from Topic 3 — JWTs are stateless. The server stores nothing. That means there's no way to invalidate a token once issued.
+Think about what that means:
+
+```
+1. User logs in → gets access token (valid 30 days)
+2. Day 3: attacker steals the token
+3. Attacker has 27 days of free access
+4. You can't stop them — server holds no state to revoke
+```
+
+The defense is to make access tokens short-lived. If stolen, the damage window is small.
+
+```
+access token expires in 15 minutes
+→ attacker steals it at minute 1
+→ dead in 14 minutes
+```
+
+But then legitimate users get logged out every 15 minutes. That's terrible UX.
+**Refresh tokens solve this tension.**
+
 ### The Two-Token System
 
 ```
@@ -700,6 +723,11 @@ REFRESH TOKEN
   Stored:     HttpOnly cookie
   Sent:       Only to /auth/refresh endpoint
 ```
+
+They work together like a key card and a master key:
+
+* Key card (access token) — used constantly, short-lived, low damage if lost
+* Master key (refresh token) — stored safely, used rarely, gets you a new key card
 
 ### The Full Flow
 
@@ -728,7 +756,11 @@ REFRESH TOKEN
    Client redirects user to login
 ```
 
-### Refresh Token DB Schema
+From the user's perspective: they log in once, stay logged in for 7 days, and are only asked to log in again after a week of inactivity.
+
+### How Refresh Tokens Are Stored Server-Side
+
+Unlike access tokens, refresh tokens are stored in the database. This is what makes them revocable.
 
 ```sql
 CREATE TABLE refresh_tokens (
@@ -741,9 +773,11 @@ CREATE TABLE refresh_tokens (
 );
 ```
 
+Note: you store the hash of the refresh token, not the token itself — same principle as passwords. If your DB leaks, raw refresh tokens aren't exposed.
+
 ### Token Rotation
 
-Every time a refresh token is used, it is replaced with a new one.
+Every time a refresh token is used, it should be replaced with a new one. This is called rotation.
 
 ```
 Client uses refreshToken_A  →  POST /auth/refresh
@@ -755,26 +789,92 @@ Server:
   5. Return both to client
 ```
 
+Why rotate? If an attacker steals a refresh token:
+
+* Without rotation: attacker uses it indefinitely
+* With rotation: legitimate user uses it first → token rotated → attacker's copy is now revoked
+
 ### Refresh Token Reuse Detection
 
-```
-Attacker stole refreshToken_A before rotation
-User already rotated: A → B → C
-Attacker now tries refreshToken_A
+This is the sophisticated part. With rotation, you can detect theft:
 
-Server sees: refreshToken_A was already used and revoked
-→ REVOKE THE ENTIRE FAMILY
-→ force user to log in again
+```
+Normal flow:
+  User has refreshToken_B (A was already rotated out)
+  User uses refreshToken_B → gets refreshToken_C ✓
+
+Theft scenario:
+  Attacker stole refreshToken_A before rotation
+  User already rotated: A → B → C
+  Attacker now tries refreshToken_A
+
+  Server sees: refreshToken_A was already used and revoked
+  This means: either a bug, or the token was stolen and reused
+
+  Server response: REVOKE THE ENTIRE FAMILY
+  → invalidate refreshToken_B and refreshToken_C too
+  → force user to log in again
+```
+
+This is called **refresh token family** tracking. A detected reuse is a signal of compromise — so the safe response is to log everyone out and make the real user re-authenticate.
+
+#### What the Refresh Endpoint Looks Like
+
+```
+POST /auth/refresh
+Body or Cookie: { refreshToken }
+
+Server:
+  1. Hash the incoming token
+  2. Look up hash in DB
+  3. Check: exists? not revoked? not expired? user still active?
+  4. If any check fails → 401, revoke family if reuse detected
+  5. If all pass → issue new accessToken + rotate refreshToken
+  6. Return new tokens
 ```
 
 ### Where to Store Tokens on the Client
 
+This is a real debate. The safest approach:
+
 ```
 accessToken   →  JavaScript memory (variable)
+                 Gone on page refresh, but that's fine — refresh token gets a new one
+
 refreshToken  →  HttpOnly cookie
+                 JavaScript can't touch it
+                 Automatically sent to /auth/refresh
+                 Protected from XSS
 ```
 
-XSS attacks can't steal either token; access is in memory, refresh is HttpOnly.
+This setup means:
+
+* XSS attack can't steal either token (access is in memory, refresh is HttpOnly)
+* CSRF can't use the refresh token meaningfully (it only produces a new token, doesn't take action)
+
+### Connecting to miniAgoda
+
+```
+POST /auth/login
+  → returns accessToken (15min) + refreshToken (7 days)
+
+POST /auth/refresh
+  → validates refreshToken, returns new accessToken
+
+All booking/payment/refund endpoints:
+  → only check accessToken
+  → never see refresh tokens
+```
+
+The client handles the refresh cycle invisibly. User books a hotel, their token expires mid-session, client silently refreshes, booking completes — they never knew.
+
+#### Summary
+
+* Access tokens are short-lived to limit theft damage — but that forces refresh tokens for UX
+* Refresh tokens are long-lived, stored in DB, and therefore revocable
+* Rotation — every use issues a new refresh token, old one revoked
+* Reuse detection — using an already-rotated token signals theft, triggers full logout
+* Store refresh token in HttpOnly cookie, access token in memory
 
 ---
 
