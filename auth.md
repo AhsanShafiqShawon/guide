@@ -1,16 +1,5 @@
-# miniAgoda — Auth Study Guide
+# Auth Study Guide
 > A full conversation-based deep dive into Authentication & Authorization, implemented in Java + Spring Boot.
-
----
-
-## Context
-
-So far, miniAgoda has:
-- Search (availability + inventory)
-- Booking
-- Payment + Refund
-
-Now adding **Auth** from zero knowledge.
 
 ---
 
