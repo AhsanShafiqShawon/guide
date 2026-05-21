@@ -51,9 +51,9 @@ User sends email + password
 ```
 
 **Authenticated Request**
-User sends token with every request
 
 ```
+User sends token with every request
 → Server verifies token
 → Attaches user identity to the request
 → Handler logic can now check permissions
