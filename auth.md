@@ -310,10 +310,12 @@ A common pattern for SPAs and mobile apps: store the token in an HttpOnly cookie
 ## Layer 1, Topic 3 — What a JWT Is
 
 **One Sentence Definition**
+
 A JWT (JSON Web Token) is a **self-contained**, signed package of claims that the server issues and the client presents on every request.
 "Self-contained" is the key word. The token is the identity — no database lookup needed.
 
 **What It Looks Like**
+
 A JWT looks like this:
 ```
 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQyLCJlbWFpbCI6Im1hcmlvQGV4YW1wbGUuY29tIiwicm9sZSI6Imd1ZXN0IiwiaWF0IjoxNzE2MjM5MDIyLCJleHAiOjE3MTYyNDI2MjJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
@@ -326,6 +328,7 @@ HEADER . PAYLOAD . SIGNATURE
 ```
 
 **Chunk 1 — Header**
+
 Describes the token itself — what type it is and what algorithm was used to sign it.
 ```json
 {
@@ -337,6 +340,7 @@ Describes the token itself — what type it is and what algorithm was used to si
 
 
 **Chunk 2 — Payload**
+
 The actual data. These fields are called claims.
 ```json
 {
@@ -360,6 +364,7 @@ The actual data. These fields are called claims.
 Important: the payload is just base64-encoded — not encrypted. Anyone can decode and read it. Never put passwords, card numbers, or secrets in a JWT payload.
 
 **Chunk 3 — Signature**
+
 This is what makes the token trustworthy.
 ```
 HMAC-SHA256(
