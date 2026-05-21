@@ -69,7 +69,7 @@ User sends token with every request
 | Revocation | Instant | Requires a blocklist |
 | Best for | Traditional web apps | APIs, mobile apps, microservices |
 
-For a hotel booking API like miniAgoda, **JWT** is the common choice.
+For a hotel booking API like miniAgoda, **JWT** is the common choice — but it has tradeoffs worth understanding.
 
 ---
 
