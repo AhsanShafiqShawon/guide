@@ -889,24 +889,88 @@ DELETE FROM sessions WHERE id = $1
 -- done. token is dead instantly.
 ```
 
-With JWT, the server holds no state. The token remains **cryptographically valid until it expires** even after the client deletes it.
+With JWT, the server holds no state. So when the user clicks logout:
+
+```
+Client deletes token from memory/cookie
+Server: ...
+Server: (nothing, server doesn't know or care)
+```
+
+The token still cryptographically valid until it expires. If the client had already sent it somewhere, or an attacker copied it, it keeps working.
+This is the fundamental tension of stateless auth — and logout forces you to resolve it.
 
 ### What "Logout" Actually Means
 
-1. **Client-side cleanup** — delete accessToken from memory, delete refreshToken cookie
-2. **Refresh token revocation** — mark refreshToken as revoked in DB
-3. **Access token invalidation** — the hard part
+There are three distinct things logout needs to accomplish:
+
+```
+1. Client-side cleanup
+   Delete accessToken from memory
+   Delete refreshToken from cookie/storage
+
+2. Refresh token revocation
+   Mark refreshToken as revoked in DB
+   Attacker can't use it to get new access tokens
+
+3. Access token invalidation
+   The hard part — access token is stateless, still valid until exp
+```
+
+Steps 1 and 2 are straightforward. Step 3 is the real problem.
+
+#### The Access Token Problem
+
+After logout, the access token lives on:
+
+```
+token issued at:  10:00am
+user logs out:    10:05am
+token expires:    10:15am
+
+window of danger: 10:05am → 10:15am (10 minutes)
+```
+
+For most applications, this is an acceptable tradeoff. Short expiry (15min) means the window is small. This is why access token lifetime is a security decision, not just a UX one.
+But sometimes 15 minutes is too long. A banking app, a healthcare system, a hotel admin portal — these may need instant revocation.
 
 ### Solution — The Token Blocklist
 
-When instant revocation is required, maintain a blocklist in Redis:
+When instant revocation is required, you maintain a blocklist:
 
-```java
-// On logout — store jti with TTL = remaining token lifetime
-// On every request — check if jti is in blocklist
+```
+On logout:
+  Store the access token's jti (JWT ID) in a blocklist
+  Set TTL = remaining token lifetime (auto-cleanup)
+
+On every request:
+  Verify JWT signature  ✓
+  Check jti NOT in blocklist  ✓
+  If in blocklist → 401
 ```
 
-`jti` is a unique ID per token (standard JWT claim). Redis auto-deletes entries when they expire, keeping the blocklist small.
+`jti` is a standard JWT claim — a unique ID per token:
+
+```java
+String accessToken = Jwts.builder()
+    .claim("userId", user.getId())
+    .claim("role",   user.getRole())
+    .id(UUID.randomUUID().toString())   // sets jti claim
+    .issuedAt(new Date())
+    .expiration(new Date(System.currentTimeMillis() + 15 * 60 * 1000))
+    .signWith(Keys.hmacShaKeyFor(SECRET_KEY.getBytes()))
+    .compact();
+```
+
+The blocklist is typically stored in Redis — fast in-memory lookups, automatic TTL expiry, doesn't pollute your main DB.
+
+```
+Redis blocklist:
+  "jti:3f9a2c..."  →  "1"   (TTL: 14 minutes remaining)
+  "jti:7d1e4b..."  →  "1"   (TTL: 3 minutes remaining)
+```
+
+When tokens expire, Redis auto-deletes them. The blocklist stays small.
 
 ### The Tradeoff Spectrum
 
@@ -919,26 +983,72 @@ FULLY STATELESS                              FULLY STATEFUL
   Acceptable for most apps                Required for high-security apps
 ```
 
-For miniAgoda:
-- Regular guest endpoints → no blocklist, short expiry is fine
-- Admin / payment endpoints → check blocklist on every request
+miniAgoda sits somewhere in the middle. Hotel booking isn't a bank, but admin and payment endpoints deserve tighter control. A reasonable approach:
 
-### Revocation Approaches Summary
+```
+Regular guest endpoints  →  no blocklist, short expiry is fine
+Admin / payment endpoints  →  check blocklist on every request
+```
 
-| Approach | Revocation speed | Performance cost | Complexity |
-|---|---|---|---|
-| Short expiry only | At expiry (minutes) | None | Low |
-| Refresh token revocation | Stops new access tokens | Low | Low |
-| Redis blocklist (jti) | Instant | Small (Redis lookup) | Medium |
-| DB user status check | ~instant | Medium | Low |
+#### Types of Logout
 
-### Logout Endpoint Logic
+Not all logouts are equal. You need to handle several scenarios:
+
+**1. Regular logout — single device**
+
+```
+Revoke current refreshToken
+Add current accessToken jti to blocklist (if using one)
+Clear client storage
+```
+
+**2. Logout all devices**
+
+```
+Revoke ALL refresh tokens for this user
+Add ALL active access tokens to blocklist (you need to track jtis per user)
+User must log in again on every device
+```
+
+**3. Forced logout — admin action**
+
+```
+Admin flags user account as suspended
+All tokens rejected regardless of validity
+Requires either blocklist or account status check on every request
+```
+
+**4. Password change**
+
+```
+Should trigger logout of all other devices
+Old tokens are potentially in attacker's hands
+Revoke all refresh tokens, blocklist all access tokens
+```
+
+#### Account Status Check — Lightweight Alternative
+
+Instead of (or alongside) a full blocklist, you can add a single DB check:
+
+```java
+// In auth filter, after JWT verification:
+User user = userRepository.findById(payload.getUserId()).orElse(null);
+if (user == null || user.isSuspended()) {
+    response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+    return;
+}
+```
+
+This catches forced logouts and suspensions with one query. The downside — it's a DB hit on every request, which partially defeats stateless JWT's performance benefit.
+A common compromise: cache the user status in Redis with a short TTL (1 minute). Fast lookup, near-instant revocation with at most 1 minute lag.
+
+### Putting It All Together — Logout Endpoint
 
 ```
 POST /auth/logout
 
 Server:
-  1. Verify accessToken
+  1. Verify accessToken (must be valid to logout)
   2. Extract jti from accessToken
   3. Add jti to Redis blocklist (TTL = remaining token lifetime)
   4. Hash incoming refreshToken
@@ -950,6 +1060,30 @@ Client:
   2. Delete refreshToken cookie
   3. Redirect to login page
 ```
+
+### Summary Table — Revocation Approaches
+
+| Approach | Revocation speed | Performance cost | Complexity |
+|---|---|---|---|
+| Short expiry only | At expiry (minutes) | None | Low |
+| Refresh token revocation | Stops new access tokens | Low | Low |
+| Redis blocklist (jti) | Instant | Small (Redis lookup) | Medium |
+| DB user status check | ~instant | Medium | Low |
+| Full session store | Instant | Medium | Low |
+
+#### Summary
+
+* Deleting a token client-side doesn't invalidate it — it's still cryptographically valid
+* Revoking the refresh token stops new access tokens but doesn't kill the current one
+* A Redis blocklist with jti gives instant revocation with minimal performance cost
+* Password changes and admin suspensions should trigger full revocation across all devices
+* Short access token expiry is your first line of defense — reduce the revocation window
+
+That completes Layer 2 — Core Implementation. You now understand:
+
+* ✅ Registration & Login (with timing attacks, enumeration, brute force)
+* ✅ Refresh tokens (rotation, reuse detection)
+* ✅ Logout & revocation (the stateless JWT problem and its solutions)
 
 ---
 
