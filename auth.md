@@ -215,7 +215,7 @@ HTTP is **stateless** by design. Every request is completely independent — the
 
 ```
 Request 1:  "Here's my email and password, log me in"  →  Server: "OK ✓"
-Request 2:  "Show me my bookings"                       →  Server: "...who are you?"
+Request 2:  "Show me my bookings"                      →  Server: "...who are you?"
 ```
 
 After login, every subsequent request needs to carry proof of identity.
@@ -232,7 +232,14 @@ Every subsequent request browser sends automatically:
   Cookie: session_id=abc123
 ```
 
-The server looks up `abc123` in its session store (database or Redis). This is **stateful** — the server holds the state.
+The server looks up `abc123` in its session store (database or Redis) to find out who you are.
+
+```
+session store:
+  "abc123"  →  { userId: 42, email: "mario@example.com", role: "guest" }
+```
+
+This is stateful — the server holds the state.
 
 ### Approach 2 — Token in Header
 
@@ -246,7 +253,25 @@ Every subsequent request client sends manually:
   Authorization: Bearer eyJhbGc...
 ```
 
-The server verifies the token itself — no lookup needed. This is **stateless** — the server holds nothing.
+The server verifies the token itself — no lookup needed. The token contains the identity.
+This is stateless — the server holds nothing.
+
+### Stateful vs. Stateless — The Real Difference
+
+```
+STATEFUL (Sessions)                    STATELESS (Tokens)
+
+Client          Server                 Client          Server
+  |   login       |                     |   login       |
+  |─────────────→ |                     |─────────────→ |
+  |   session_id  |  stores session     |   token       |  stores nothing
+  |←───────────── |  in DB/Redis        |←───────────── |
+  |               |                     |               |
+  |   session_id  |  looks up session   |   token       |  verifies token
+  |─────────────→ |  in DB              |─────────────→ |  mathematically
+  |   response    |                     |   response    |
+  |←───────────── |                     |←───────────── |
+```
 
 ### Cookie Properties Worth Knowing
 
@@ -257,7 +282,11 @@ The server verifies the token itself — no lookup needed. This is **stateless**
 | `SameSite=Strict` | Only sent on same-site requests — blocks CSRF |
 | `Max-Age` | How long until it expires |
 
+These flags matter a lot. A cookie without HttpOnly can be stolen by injected JavaScript.
+
 ### Where Tokens Are Stored (Client Side)
+
+Since tokens aren't automatically handled by the browser like cookies, the client has to store them somewhere:
 
 | Storage | XSS risk | CSRF risk | Notes |
 |---|---|---|---|
@@ -266,7 +295,15 @@ The server verifies the token itself — no lookup needed. This is **stateless**
 | HttpOnly Cookie | ✓ None | ✗ Needs mitigation | Best of both worlds |
 | Memory (JS variable) | ✓ None | ✓ None | Gone on page refresh |
 
-A common pattern: store the token in an **HttpOnly cookie** even though it's a token-based system. You get the security of cookies with the flexibility of tokens.
+A common pattern for SPAs and mobile apps: store the token in an HttpOnly cookie even though it's a token-based system. You get the security of cookies with the flexibility of tokens.
+
+### Summary
+
+* HTTP is stateless — identity must be re-proved on every request
+* Cookies — browser handles automatically, server holds state
+* Token in header — client handles manually, server is stateless
+* Cookie flags (HttpOnly, Secure, SameSite) are not optional niceties — they're security requirements
+* Where you store a token on the client has real security consequences
 
 ---
 
