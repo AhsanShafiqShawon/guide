@@ -93,14 +93,16 @@ For a hotel booking API like miniAgoda, **JWT** is the common choice — but it 
 ## Layer 1, Topic 1 — How Passwords Should Be Stored
 
 ### The Wrong Way First
+Let's say a user registers with the password sunshine99. The naive approach:
 
 ```
 store in DB:  password = "sunshine99"
 ```
 
-This is **plaintext storage**. If your database is ever leaked, every single user's password is immediately exposed.
+This is **plaintext storage**. If your database is ever leaked — and breaches happen to big companies constantly — every single user's password is immediately exposed. Since people reuse passwords, that also compromises their Gmail, bank, and everything.
 
 ### Attempt 2 — Encryption
+*"What if we encrypt it?"*
 
 ```
 store in DB:  password = encrypt("sunshine99", secretKey)
