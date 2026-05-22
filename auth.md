@@ -1385,7 +1385,8 @@ POST /admin/hotels  (admin token)
 
 ### The Problem Route Protection Doesn't Solve
 
-Route protection only checks **authentication**. It doesn't check **ownership**.
+Topic 7 answered: "*Is this user logged in?*"
+But that's not enough. Consider:
 
 ```
 Mario  logs in → token { userId: 42 }
@@ -1396,9 +1397,17 @@ Server check: is user authenticated?  ✓
 Server:       deletes Luigi's booking  ✗
 ```
 
-This is called **BOLA** (Broken Object Level Authorization) / **IDOR** (Insecure Direct Object Reference) — the #1 API security vulnerability.
+Route protection only checks *authentication*. It doesn't check ownership. Mario is authenticated — but booking 77 isn't his.
+This class of bug is called **Broken Object Level Authorization (BOLA)** — or IDOR (Insecure Direct Object Reference). It's consistently ranked the #1 API security vulnerability.
+
+#### The Core Rule
+
+> Every time a user accesses a specific resource, verify they own it or are authorized for it — not just that they're logged in.
+
 
 ### Approach 1 — Check in Service Layer
+
+The most straightforward pattern. The service fetches the resource and checks ownership before doing anything.
 
 ```java
 @Service
@@ -1421,7 +1430,7 @@ public class BookingService {
     }
 }
 ```
-
+Controller stays clean — it just passes the authenticated userId down:
 ```java
 @DeleteMapping("/{bookingId}")
 public ResponseEntity<Void> cancelBooking(
@@ -1436,12 +1445,15 @@ public ResponseEntity<Void> cancelBooking(
 
 ### Approach 2 — Fetch by ID + Owner Together
 
+Instead of fetching then checking, query with both conditions at once. If nothing is returned, either the resource doesn't exist or the user doesn't own it — either way, denied.
+
 ```java
 // Repository
 public interface BookingRepository extends JpaRepository<Booking, Long> {
     Optional<Booking> findByIdAndUserId(Long id, Long userId);
 }
-
+```
+```java
 // Service
 public void cancelBooking(Long bookingId, Long requestingUserId) {
     Booking booking = bookingRepository
@@ -1453,7 +1465,11 @@ public void cancelBooking(Long bookingId, Long requestingUserId) {
 }
 ```
 
+This is cleaner and slightly safer — you never even load a resource the user doesn't own. It also avoids leaking whether a resource exists to unauthorized users.
+
 ### Approach 3 — @PreAuthorize with SpEL
+
+Spring Security lets you express ownership rules declaratively using annotations. Useful for simple cases.
 
 ```java
 @Service
@@ -1471,6 +1487,7 @@ public class BookingService {
     }
 }
 ```
+The `@bookingAuthz` bean handles the ownership check:
 
 ```java
 @Component("bookingAuthz")
@@ -1487,6 +1504,7 @@ public class BookingAuthorizationService {
     }
 }
 ```
+Enable `@PreAuthorize` in your security config:
 
 ```java
 @Configuration
@@ -1495,6 +1513,8 @@ public class SecurityConfig { ... }
 ```
 
 ### Admin Override Pattern
+
+Admins should be able to access any resource. Build this into your ownership check:
 
 ```java
 // Inline check
@@ -1512,13 +1532,40 @@ public void cancelBooking(Long bookingId, Long requestingUserId, String role) {
     booking.setStatus(BookingStatus.CANCELLED);
     bookingRepository.save(booking);
 }
-
+```
+Or with `@PreAuthorize`:
+```java
 // Or with @PreAuthorize
 @PreAuthorize("hasRole('ADMIN') or @bookingAuthz.isOwner(#bookingId, authentication)")
 public void cancelBooking(Long bookingId) { ... }
 ```
 
+#### Ownership Across miniAgoda Resources
+
+Every resource in your system needs its own ownership rule:
+
+```
+Booking
+  owner:   booking.userId == currentUserId
+  admin:   always allowed
+
+Payment
+  owner:   payment.userId == currentUserId
+            OR payment.bookingId belongs to currentUserId
+  admin:   always allowed
+
+Refund
+  owner:   refund.userId == currentUserId
+  admin:   always allowed
+
+Hotel (if hotel managers exist)
+  owner:   hotel.managerId == currentUserId
+  admin:   always allowed
+```
+
 ### The Error Response — Don't Leak Information
+
+There's a subtle security decision in how you respond to ownership failures:
 
 ```java
 // ❌ Leaks that the resource exists but user doesn't own it
@@ -1528,7 +1575,11 @@ throw new AccessDeniedException("You do not own this booking");   // 403
 throw new AccessDeniedException("Booking not found or access denied");  // 404
 ```
 
+Returning `403` for an existing resource confirms to an attacker that the resource exists. Returning `404` always reveals nothing. For sensitive resources (payments, personal bookings) — prefer `404`.
+
 ### Custom Exception Handler
+
+Wire your exceptions to clean HTTP responses:
 
 ```java
 @RestControllerAdvice
@@ -1549,6 +1600,14 @@ public class GlobalExceptionHandler {
     }
 }
 ```
+
+#### Summary
+
+* Route protection checks *authentication* — ownership checks check *authorization on a specific resource*
+* Fetch by `id + userId` together — cleaner and doesn't load unauthorized resources
+* `@PreAuthorize` with a custom bean keeps business logic and auth logic separated
+* Admins bypass ownership — build that into every ownership check explicitly
+* Return `404` not `403` for ownership failures on sensitive resources — don't confirm existence
 
 ---
 
