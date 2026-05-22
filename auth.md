@@ -1089,7 +1089,7 @@ That completes Layer 2 — Core Implementation. You now understand:
 
 ## Layer 3, Topic 7 — Protecting Routes with Middleware
 
-In Spring Boot, the "middleware" concept maps to a **JWT filter** + **Security configuration**.
+In Spring Boot, the "middleware" concept maps to two things — a **JWT** filter that runs on every request, and **Security configuration** that defines which routes need protection.
 
 ### The Big Picture
 
@@ -1117,6 +1117,8 @@ Incoming Request
 ```
 
 ### Step 1 — The JWT Utility Class
+
+Handles signing, verifying, and extracting claims from tokens.
 
 ```java
 @Component
@@ -1173,6 +1175,8 @@ public class JwtUtil {
 ```
 
 ### Step 2 — The JWT Filter
+
+Runs on every request. Extracts the token, verifies it, and loads the user identity into Spring's `SecurityContext`.
 
 ```java
 @Component
@@ -1238,6 +1242,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
 ### Step 3 — Security Configuration
 
+Defines which routes are public and which require authentication or specific roles.
+
 ```java
 @Configuration
 @EnableWebSecurity
@@ -1286,6 +1292,8 @@ public class SecurityConfig {
 
 ### Step 4 — Redis Blocklist Service
 
+Used by the filter to check if a token was logged out.
+
 ```java
 @Service
 @RequiredArgsConstructor
@@ -1309,6 +1317,8 @@ public class TokenBlocklistService {
 ```
 
 ### Step 5 — Accessing the Authenticated User in Controllers
+
+Once the filter sets the `SecurityContext`, controllers can access the current user cleanly:
 
 ```java
 @RestController
@@ -1354,7 +1364,20 @@ POST /admin/hotels  (guest token)
   → JwtAuthFilter: verifies token, sets SecurityContext (role=GUEST)
   → SecurityConfig: /admin/** requires ADMIN role
   → 403 Forbidden  ✓
+
+POST /admin/hotels  (admin token)
+  → JwtAuthFilter: verifies token, sets SecurityContext (role=ADMIN)
+  → SecurityConfig: role matches  ✓
+  → Controller proceeds  ✓
 ```
+
+#### Summary
+
+* `JwtAuthFilter` — extracts and verifies token on every request, populates SecurityContext
+* `SecurityConfig` — declares which routes are public, authenticated, or role-restricted
+* `TokenBlocklistService` — Redis-backed, checks if a jti was revoked on logout
+* `@AuthenticationPrincipal` — clean way to access the current user in any controller
+* `SessionCreationPolicy.STATELESS` — tells Spring not to create sessions, JWT only
 
 ---
 
