@@ -1603,7 +1603,7 @@ public class GlobalExceptionHandler {
 
 #### Summary
 
-* Route protection checks *authentication* — ownership checks check *authorization on a specific resource*
+* Route protection checks *authentication* — ownership checks *authorization on a specific resource*
 * Fetch by `id + userId` together — cleaner and doesn't load unauthorized resources
 * `@PreAuthorize` with a custom bean keeps business logic and auth logic separated
 * Admins bypass ownership — build that into every ownership check explicitly
@@ -1613,7 +1613,21 @@ public class GlobalExceptionHandler {
 
 ## Layer 3, Topic 9 — Roles & Permissions
 
+#### What Roles Solve
+Ownership (Topic 8) answers: "*does this user own this resource?*"
+Roles answer: "*what is this user allowed to do in the system — regardless of ownership?*"
+
+```
+Guest        → can search, book, pay, cancel own bookings
+Hotel Manager → can manage their own hotel's inventory, view their bookings
+Admin        → can do everything
+```
+
+Without roles, your only options are "logged in" or "not logged in". With roles, you get fine-grained control over the entire system.
+
 ### RBAC — Role Based Access Control
+
+The most common model. Every user has a role. Every role has a set of permissions.
 
 ```
 User ──→ Role ──→ Permissions
@@ -1625,27 +1639,36 @@ sarah    ADMIN    [*]
 ### Step 1 — Define Roles and Permissions
 
 ```java
+// Roles
 public enum Role {
     GUEST,
     MANAGER,
     ADMIN
 }
 
+// Permissions — granular actions in the system
 public enum Permission {
+    // Booking
     BOOKING_CREATE,
     BOOKING_VIEW_OWN,
     BOOKING_CANCEL_OWN,
-    BOOKING_VIEW_ALL,
-    BOOKING_CANCEL_ANY,
+    BOOKING_VIEW_ALL,       // admin
+    BOOKING_CANCEL_ANY,     // admin
+
+    // Hotel
     HOTEL_VIEW,
-    HOTEL_MANAGE_OWN,
-    HOTEL_MANAGE_ANY,
+    HOTEL_MANAGE_OWN,       // manager
+    HOTEL_MANAGE_ANY,       // admin
+
+    // Payment
     PAYMENT_CREATE,
     PAYMENT_VIEW_OWN,
     PAYMENT_REFUND_OWN,
-    PAYMENT_REFUND_ANY,
-    USER_VIEW_ANY,
-    USER_SUSPEND
+    PAYMENT_REFUND_ANY,     // admin
+
+    // User management
+    USER_VIEW_ANY,          // admin
+    USER_SUSPEND            // admin
 }
 ```
 
@@ -1666,7 +1689,7 @@ public enum Role {
     MANAGER(Set.of(
         Permission.HOTEL_VIEW,
         Permission.HOTEL_MANAGE_OWN,
-        Permission.BOOKING_VIEW_OWN,
+        Permission.BOOKING_VIEW_OWN,    // own hotel's bookings
         Permission.PAYMENT_VIEW_OWN
     )),
 
@@ -1697,18 +1720,26 @@ public enum Role {
         return permissions;
     }
 
+    // Spring Security expects GrantedAuthority objects
     public List<SimpleGrantedAuthority> getAuthorities() {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+
+        // Add each permission as an authority
         permissions.stream()
             .map(p -> new SimpleGrantedAuthority(p.name()))
             .forEach(authorities::add);
+
+        // Add the role itself (Spring convention: prefix with ROLE_)
         authorities.add(new SimpleGrantedAuthority("ROLE_" + this.name()));
+
         return authorities;
     }
 }
 ```
 
 ### Step 3 — Load Authorities into SecurityContext
+
+When the JWT filter loads the user, Spring needs to know their authorities:
 
 ```java
 @Service
@@ -1733,20 +1764,36 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 
 ### Step 4 — Protect Endpoints by Permission
 
+**By role** — broad access control:
+
+```java
+.authorizeHttpRequests(auth -> auth
+    .requestMatchers("/admin/**").hasRole("ADMIN")
+    .requestMatchers("/manager/**").hasAnyRole("MANAGER", "ADMIN")
+    .requestMatchers("/bookings/**").authenticated()
+    .anyRequest().authenticated()
+)
+```
+
+**By permission** — fine-grained access control:
+
 ```java
 @RestController
 @RequestMapping("/bookings")
 public class BookingController {
 
+    // Any authenticated user with BOOKING_CREATE permission
     @PostMapping
     @PreAuthorize("hasAuthority('BOOKING_CREATE')")
     public ResponseEntity<BookingResponse> createBooking(...) { ... }
 
+    // Admin only — view any booking
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('BOOKING_VIEW_ALL') or " +
                   "@bookingAuthz.isOwner(#id, authentication)")
     public ResponseEntity<BookingResponse> getBooking(@PathVariable Long id, ...) { ... }
 
+    // Admin can cancel any, guest can only cancel own
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('BOOKING_CANCEL_ANY') or " +
                   "(hasAuthority('BOOKING_CANCEL_OWN') and " +
@@ -1758,8 +1805,10 @@ public class BookingController {
 ### Step 5 — DB Schema for Roles
 
 ```sql
+-- Single role per user (simple RBAC)
 ALTER TABLE users ADD COLUMN role VARCHAR(50) DEFAULT 'GUEST';
 
+-- For hotel managers — link manager to their hotel
 CREATE TABLE hotel_managers (
     user_id   BIGINT REFERENCES users(id),
     hotel_id  BIGINT REFERENCES hotels(id),
@@ -1767,7 +1816,7 @@ CREATE TABLE hotel_managers (
 );
 ```
 
-### Manager Ownership Check
+Manager ownership check uses this join:
 
 ```java
 @Component("hotelAuthz")
@@ -1791,7 +1840,60 @@ public class HotelAuthorizationService {
 public ResponseEntity<Void> updateInventory(@PathVariable Long hotelId, ...) { ... }
 ```
 
-> **Important:** If a user's role changes, their existing token still carries the old role until it expires. Short-lived access tokens are your safety net. For immediate role updates, use the blocklist to invalidate their current token.
+#### Role in the JWT
+
+Include role in the token so middleware doesn't need a DB lookup for basic checks:
+
+```java
+public String generateAccessToken(User user) {
+    return Jwts.builder()
+        .subject(String.valueOf(user.getId()))
+        .claim("email", user.getEmail())
+        .claim("role",  user.getRole().name())   // "GUEST", "MANAGER", "ADMIN"
+        .claim("jti",   UUID.randomUUID().toString())
+        .issuedAt(new Date())
+        .expiration(new Date(System.currentTimeMillis() + accessTokenExpiry))
+        .signWith(getSigningKey())
+        .compact();
+}
+```
+
+One important implication — if a user's role is changed (guest promoted to manager), their existing token still carries the old role until it expires. This is why short-lived access tokens matter. For immediate role updates, you'd need to add the user's role version to the token and check it against the DB — or simply use the blocklist to invalidate their current token.
+
+#### The Full Permission Check Flow
+
+```
+DELETE /bookings/77
+
+JwtAuthFilter:
+  → verifies token
+  → loads user: { userId: 42, role: GUEST }
+  → sets authorities: [BOOKING_CREATE, BOOKING_CANCEL_OWN, ..., ROLE_GUEST]
+
+@PreAuthorize check:
+  → hasAuthority('BOOKING_CANCEL_ANY')?   GUEST doesn't have it  ✗
+  → hasAuthority('BOOKING_CANCEL_OWN')?   GUEST has it           ✓
+  → @bookingAuthz.isOwner(77, auth)?      booking 77 userId=42   ✓
+  → combined: true  ✓
+
+BookingService.cancelBooking(77):
+  → proceeds
+```
+
+#### Summary
+
+* Roles group users by what they're allowed to do — GUEST, MANAGER, ADMIN
+* Permissions are granular actions — `BOOKING_CANCEL_OWN`, `HOTEL_MANAGE_ANY`
+* Roles map to sets of permissions — Spring loads both as `GrantedAuthority`
+* `@PreAuthorize` combines role checks and ownership checks in one expression
+* Role is stored in JWT for fast access — but short expiry handles stale role data
+* Manager-to-hotel relationship lives in a join table, checked via a custom authz bean
+
+That completes Layer 3 — **Authorization**. You now understand:
+
+* ✅ Protecting routes with middleware (JwtAuthFilter + SecurityConfig)
+* ✅ Resource ownership (BOLA prevention, fetch by id+owner)
+* ✅ Roles & permissions (RBAC, @PreAuthorize, authorities)
 
 ---
 
