@@ -2570,6 +2570,7 @@ User user = User.builder()
 ### The Full System Map
 
 **The Complete Picture**
+
 You've learned every piece individually. Now let's wire them together into one coherent system — showing exactly how Auth sits alongside your existing Search, Booking, and Payment flows.
 
 **The Full System Map**
