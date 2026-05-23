@@ -1618,9 +1618,9 @@ Ownership (Topic 8) answers: "*does this user own this resource?*"
 Roles answer: "*what is this user allowed to do in the system — regardless of ownership?*"
 
 ```
-Guest        → can search, book, pay, cancel own bookings
-Hotel Manager → can manage their own hotel's inventory, view their bookings
-Admin        → can do everything
+Guest          → can search, book, pay, cancel own bookings
+Hotel Manager  → can manage their own hotel's inventory, view their bookings
+Admin          → can do everything
 ```
 
 Without roles, your only options are "logged in" or "not logged in". With roles, you get fine-grained control over the entire system.
