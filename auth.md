@@ -2569,21 +2569,33 @@ User user = User.builder()
 
 ### The Full System Map
 
+**The Complete Picture**
+You've learned every piece individually. Now let's wire them together into one coherent system — showing exactly how Auth sits alongside your existing Search, Booking, and Payment flows.
+
+**The Full System Map**
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        miniAgoda API                        │
-│                                                             │
-│  PUBLIC                  AUTHENTICATED         ADMIN ONLY   │
-│  GET  /hotels            POST /bookings        GET  /admin/users     │
-│  POST /auth/register     GET  /bookings/my     POST /admin/refunds   │
-│  POST /auth/login        DELETE /bookings/:id  PUT  /admin/hotels    │
-│  POST /auth/refresh      POST /payments                     │
-│  POST /auth/oauth2/**    POST /payments/refund              │
-│  POST /auth/logout       GET  /users/me                     │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                        miniAgoda API                                  │
+│                                                                       │
+│  PUBLIC                  AUTHENTICATED         ADMIN ONLY             │
+│  ──────                  ─────────────         ──────────             │
+│  GET  /hotels            POST /bookings        GET  /admin/users      │
+│  POST /auth/register     GET  /bookings/my     POST /admin/refunds    │
+│  POST /auth/login        DELETE /bookings/:id  PUT  /admin/hotels     │
+│  POST /auth/refresh      POST /payments                               │
+│  POST /auth/oauth2/**    POST /payments/refund                        │
+│  POST /auth/logout       GET  /users/me                               │
+└───────────────────────────────────────────────────────────────────────┘
+         │                       │
+         ▼                       ▼
+  No token needed          JwtAuthFilter runs
+                           ownership checked
+                           role checked
 ```
 
 ### Complete Auth Flow — Registration to Booking
+
+Let's trace a full user journey end to end:
 
 ```
 1.  POST /auth/register          → creates account, hashes password
@@ -2599,6 +2611,8 @@ User user = User.builder()
 
 ### The Middleware Stack in Order
 
+Every authenticated request passes through this exact sequence:
+
 ```java
 // 1. JwtAuthFilter — extracts token, verifies, checks blocklist, sets SecurityContext
 // 2. SecurityConfig route rules — public / authenticated / role-restricted
@@ -2606,10 +2620,23 @@ User user = User.builder()
 // 4. Ownership check inside service — does this user own this specific resource?
 // 5. Business logic — actually do the thing
 ```
+### Wiring Into Existing Controllers
 
-### Booking Controller — After Auth
+#### Booking Controller — Before Auth
 
 ```java
+// BEFORE — no concept of who is making the request
+@PostMapping
+public ResponseEntity<BookingResponse> createBooking(
+        @RequestBody BookingRequest request
+) {
+    return ResponseEntity.ok(bookingService.create(request));
+}
+```
+#### Booking Controller — After Auth
+
+```
+// AFTER — user identity flows through everything
 @RestController
 @RequestMapping("/bookings")
 @RequiredArgsConstructor
@@ -2617,6 +2644,7 @@ public class BookingController {
 
     private final BookingService bookingService;
 
+    // Create — any authenticated user
     @PostMapping
     @PreAuthorize("hasAuthority('BOOKING_CREATE')")
     public ResponseEntity<BookingResponse> createBooking(
@@ -2627,6 +2655,7 @@ public class BookingController {
         return ResponseEntity.ok(bookingService.create(userId, request));
     }
 
+    // View own bookings
     @GetMapping("/my")
     @PreAuthorize("hasAuthority('BOOKING_VIEW_OWN')")
     public ResponseEntity<List<BookingResponse>> getMyBookings(
@@ -2636,6 +2665,7 @@ public class BookingController {
         return ResponseEntity.ok(bookingService.findByUser(userId));
     }
 
+    // Cancel — owner or admin
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('BOOKING_CANCEL_ANY') or " +
                   "(hasAuthority('BOOKING_CANCEL_OWN') and " +
@@ -2693,8 +2723,10 @@ public class PaymentController {
 @RequiredArgsConstructor
 public class AuthController {
 
-    private final AuthService authService;
+    private final AuthService    authService;
+    private final HttpServletResponse httpResponse;
 
+    // Register
     @PostMapping("/register")
     public ResponseEntity<Void> register(
             @RequestBody @Valid RegisterRequest request
@@ -2703,6 +2735,7 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.CREATED).build();
     }
 
+    // Login — sets HttpOnly cookies
     @PostMapping("/login")
     public ResponseEntity<Void> login(
             @RequestBody @Valid LoginRequest request,
@@ -2715,6 +2748,7 @@ public class AuthController {
         return ResponseEntity.ok().build();
     }
 
+    // Refresh — reads refreshToken cookie, issues new accessToken
     @PostMapping("/refresh")
     public ResponseEntity<Void> refresh(
             @CookieValue(name = "refreshToken", required = false) String refreshToken,
@@ -2728,6 +2762,7 @@ public class AuthController {
         return ResponseEntity.ok().build();
     }
 
+    // Logout — revokes tokens, clears cookies
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(
             @CookieValue(name = "accessToken",  required = false) String accessToken,
@@ -2739,6 +2774,7 @@ public class AuthController {
         return ResponseEntity.ok().build();
     }
 
+    // Current user info
     @GetMapping("/me")
     public ResponseEntity<UserResponse> me(
             @AuthenticationPrincipal UserDetails userDetails
@@ -2747,6 +2783,7 @@ public class AuthController {
         return ResponseEntity.ok(authService.getMe(userId));
     }
 
+    // ── Cookie helpers ───────────────────────────────────────
     private void setTokenCookies(HttpServletResponse response, AuthTokens tokens) {
         response.addHeader(HttpHeaders.SET_COOKIE,
             buildCookie("accessToken",  tokens.getAccessToken(),  "/",            15 * 60).toString());
@@ -2784,15 +2821,16 @@ public class AuthController {
 ### Complete DB Schema — Auth Layer
 
 ```sql
+-- Users
 CREATE TABLE users (
     id            BIGSERIAL PRIMARY KEY,
     email         VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255),
+    password_hash VARCHAR(255),                    -- null for OAuth users
     name          VARCHAR(255),
     picture       VARCHAR(500),
     role          VARCHAR(50) DEFAULT 'GUEST',
-    provider      VARCHAR(50) DEFAULT 'LOCAL',
-    provider_id   VARCHAR(255),
+    provider      VARCHAR(50) DEFAULT 'LOCAL',     -- LOCAL, GOOGLE
+    provider_id   VARCHAR(255),                    -- Google's user ID
     suspended     BOOLEAN DEFAULT FALSE,
     created_at    TIMESTAMP DEFAULT NOW(),
     last_login_at TIMESTAMP
@@ -2802,11 +2840,12 @@ CREATE UNIQUE INDEX idx_users_provider
     ON users(provider, provider_id)
     WHERE provider_id IS NOT NULL;
 
+-- Refresh tokens
 CREATE TABLE refresh_tokens (
     id          BIGSERIAL PRIMARY KEY,
     user_id     BIGINT REFERENCES users(id) ON DELETE CASCADE,
     token_hash  VARCHAR(255) NOT NULL,
-    family_id   UUID NOT NULL,
+    family_id   UUID NOT NULL,                     -- for reuse detection
     expires_at  TIMESTAMP NOT NULL,
     revoked     BOOLEAN DEFAULT FALSE,
     created_at  TIMESTAMP DEFAULT NOW()
@@ -2814,6 +2853,7 @@ CREATE TABLE refresh_tokens (
 
 CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
 
+-- Hotel managers (for MANAGER role)
 CREATE TABLE hotel_managers (
     user_id   BIGINT REFERENCES users(id),
     hotel_id  BIGINT REFERENCES hotels(id),
@@ -2853,6 +2893,33 @@ spring:
 ```
 
 > Never hardcode secrets. Always environment variables.
+
+#### What You Built — The Full Auth System
+
+```
+Layer 1 — Foundations
+  ✅ Passwords hashed with bcrypt (cost 12)
+  ✅ Identity carried via JWT in HttpOnly cookies
+  ✅ Tokens: header.payload.signature, signed with HS256
+
+Layer 2 — Core Implementation
+  ✅ Registration with validation, enumeration protection
+  ✅ Login with timing attack defense, brute force rate limiting
+  ✅ Refresh tokens with rotation + reuse detection
+  ✅ Logout with Redis blocklist + refresh token revocation
+
+Layer 3 — Authorization
+  ✅ JwtAuthFilter protects every route
+  ✅ SecurityConfig declares public vs authenticated vs admin routes
+  ✅ Ownership checks — fetch by id + userId, @PreAuthorize
+  ✅ RBAC — GUEST / MANAGER / ADMIN with granular permissions
+
+Layer 4 — Real World
+  ✅ OAuth / Google Login — find or create user, issue miniAgoda JWT
+  ✅ Brute force, credential stuffing, JWT tampering, XSS,
+     CSRF, enumeration, mass assignment — all defended
+  ✅ Wired into Search, Booking, Payment
+```
 
 ---
 
