@@ -1901,12 +1901,32 @@ That completes Layer 3 — **Authorization**. You now understand:
 
 ### What OAuth Actually Is
 
-- **OAuth 2.0** handles the authorization flow
-- **OpenID Connect (OIDC)** adds the identity layer — who the user actually is
+A common misconception — OAuth is not an authentication protocol. It's an **authorization** protocol. It answers:
 
-You use both together. The user's Google password **never touches miniAgoda**.
+> "Can this third-party app access my Google data on my behalf?"
 
-### The Flow
+But the industry hijacked it for "Login with Google" — which is why **OpenID Connect (OIDC)** was built on top of OAuth 2.0 to add the actual identity layer.
+
+In practice when you implement "Login with Google":
+
+* **OAuth 2.0** handles the authorization flow — getting access to Google's APIs
+* **OpenID Connect** adds the identity layer — who the user actually is
+
+You use both together. Most people just call the whole thing "OAuth".
+
+#### The Core Problem It Solves
+
+Without OAuth, "Login with Google" would mean:
+
+```
+User gives miniAgoda their Google email + password
+miniAgoda logs into Google on their behalf
+```
+
+This is catastrophic — miniAgoda sees the Google password, and if miniAgoda is breached, Google credentials leak.
+OAuth solves this by never sharing the password. miniAgoda never sees it.
+
+### The Flow — Step by Step
 
 ```
 User clicks "Login with Google"
@@ -1935,7 +1955,27 @@ miniAgoda finds or creates user in its own DB
 issues its own JWT to the user
 ```
 
-### Step 1 — Dependencies
+The user's Google password never touches miniAgoda. Google handles the authentication. miniAgoda just receives a verified identity.
+
+#### Key Parameters Explained
+
+**Client ID + Client Secret** When you register miniAgoda with Google Cloud Console, Google gives you these. Client ID is public — sent in URLs. Client Secret is private — never exposed to the browser, only used server-to-server.
+**Redirect URI** Where Google sends the user back after they approve. Must be pre-registered with Google. Prevents attackers from redirecting the auth code to their own server.
+**Scope** What data miniAgoda is requesting access to:
+
+```
+openid         → identity (required for OIDC)
+email          → user's email address
+profile        → name, picture
+```
+
+**State** A random value miniAgoda generates and sends to Google. Google sends it back. miniAgoda verifies it matches. Prevents CSRF attacks on the OAuth flow.
+**Authorization Code** Short-lived, single-use code Google sends back. Meaningless on its own — must be exchanged for tokens server-side. Even if intercepted in the URL, useless without the client secret.
+**ID Token** A JWT from Google containing the user's identity. miniAgoda verifies its signature using Google's public keys.
+
+### Spring Boot Implementation
+
+#### Step 1 — Dependencies
 
 ```xml
 <!-- pom.xml -->
@@ -1945,7 +1985,7 @@ issues its own JWT to the user
 </dependency>
 ```
 
-### Step 2 — Configuration
+#### Step 2 — Configuration
 
 ```yaml
 # application.yml
@@ -2012,7 +2052,9 @@ public class SecurityConfig {
 }
 ```
 
-### Step 4 — OAuth2 Success Handler
+#### Step 4 — Success Handler
+
+This is where miniAgoda takes over after Google confirms identity. Find or create the user, issue miniAgoda's own JWT.
 
 ```java
 @Component
@@ -2050,6 +2092,8 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
 ```
 
 ### Step 5 — Find or Create User
+
+OAuth users don't have passwords — handle that in your user model:
 
 ```java
 @Service
@@ -2097,13 +2141,52 @@ ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
 CREATE UNIQUE INDEX idx_users_provider ON users(provider, provider_id);
 ```
 
-### Account Linking
+### Account Linking — The Edge Case
 
-If a user previously registered with email/password and now tries "Login with Google" with the same email:
+What if a user previously registered with email/password using `mario@gmail.com`, and now tries "Login with Google" with the same email?
 
-- **Option A — Auto-link:** risky — email spoofing possible
-- **Option B — Prompt to link:** verify ownership first (recommended for miniAgoda)
-- **Option C — Separate accounts:** simplest, confusing UX
+```
+Existing:  { email: mario@gmail.com, provider: LOCAL,  passwordHash: "..." }
+Incoming:  { email: mario@gmail.com, provider: GOOGLE, googleId: "xyz" }
+```
+
+You have three options:
+
+```
+Option A — Auto-link
+  Same email = same person, merge accounts silently
+  Risk: email spoofing — attacker creates Google account with victim's email
+
+Option B — Prompt to link
+  "An account with this email exists. Log in with password to link accounts."
+  Safer — confirms ownership before linking
+
+Option C — Treat as separate accounts
+  Simplest, but confusing UX
+```
+
+For miniAgoda, **Option B** is the right balance — prompt to link, verify ownership first.
+
+#### The Flow Summarized
+
+```
+miniAgoda never sees Google password         ✓
+Google verifies the user's identity          ✓
+miniAgoda gets email + name + googleId       ✓
+miniAgoda issues its own JWT                 ✓
+From here — identical to email/password auth ✓
+```
+
+After the OAuth flow, the rest of your system doesn't know or care how the user authenticated. They have a miniAgoda JWT. Everything in Topics 7, 8, 9 applies exactly the same.
+
+#### Summary
+
+* OAuth 2.0 + OIDC — OAuth handles the flow, OIDC adds the identity (id_token)
+* miniAgoda never sees Google's password — Google authenticates, miniAgoda gets the result
+* `state` parameter prevents CSRF on the OAuth flow
+* After Google confirms identity — find or create user, issue miniAgoda's own JWT
+* OAuth users have no password — `password_hash` is nullable
+* Account linking needs care — auto-linking on email alone is unsafe
 
 ---
 
