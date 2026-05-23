@@ -2203,6 +2203,7 @@ Auth is the front door of your system. It gets attacked more than anything else.
 ### Attack 1 — Brute Force
 
 **How it works**
+
 Attacker systematically tries passwords against a known email:
 
 ```
@@ -2281,6 +2282,7 @@ private String getClientIp(HttpServletRequest request) {
 ### Attack 2 — Credential Stuffing
 
 **How it works**
+
 Brute force tries random passwords. Credential stuffing is smarter — it uses real leaked credentials from other breached sites.
 
 ```
@@ -2322,6 +2324,7 @@ Check at registration — reject passwords that appear in known breaches.
 ### Attack 3 — JWT Tampering
 
 **How it works**
+
 Recall from Topic 3 — the payload is base64 encoded, not encrypted. An attacker decodes it, modifies it, re-encodes it:
 
 ```
@@ -2382,6 +2385,7 @@ Modern libraries handle this, but it's worth understanding why.
 ### Attack 4 — Token Theft via XSS
 
 **How it works**
+
 Cross-Site Scripting (XSS) — attacker injects malicious JavaScript into your page. If the token is in localStorage, that script reads and exfiltrates it:
 
 ```javascript
@@ -2431,6 +2435,7 @@ XSS can still do damage (make API calls as the user) — but it can't steal the 
 ### Attack 5 — CSRF
 
 **How it works**
+
 Cross-Site Request Forgery. If your token is in a cookie, the browser automatically sends it — even on requests triggered by other sites:
 
 ```
@@ -2470,6 +2475,7 @@ For a pure JWT API with `SameSite=Strict` cookies — CSRF is largely mitigated.
 ### Attack 6 — Account Enumeration
 
 **How it works**
+
 Subtle information leaks reveal which accounts exist:
 
 ```
@@ -2502,6 +2508,7 @@ Same applies to password reset:
 ### Attack 7 — Mass Assignment
 
 **How it works**
+
 Attacker sends extra fields in a request body hoping they get mapped to sensitive model fields:
 
 ```java
