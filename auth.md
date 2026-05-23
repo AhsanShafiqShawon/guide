@@ -1960,7 +1960,9 @@ The user's Google password never touches miniAgoda. Google handles the authentic
 #### Key Parameters Explained
 
 **Client ID + Client Secret** When you register miniAgoda with Google Cloud Console, Google gives you these. Client ID is public — sent in URLs. Client Secret is private — never exposed to the browser, only used server-to-server.
+
 **Redirect URI** Where Google sends the user back after they approve. Must be pre-registered with Google. Prevents attackers from redirecting the auth code to their own server.
+
 **Scope** What data miniAgoda is requesting access to:
 
 ```
