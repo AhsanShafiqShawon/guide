@@ -2636,7 +2636,7 @@ public ResponseEntity<BookingResponse> createBooking(
 ```
 #### Booking Controller — After Auth
 
-```
+```java
 // AFTER — user identity flows through everything
 @RestController
 @RequestMapping("/bookings")
