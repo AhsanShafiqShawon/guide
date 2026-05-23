@@ -1972,7 +1972,9 @@ profile        → name, picture
 ```
 
 **State** A random value miniAgoda generates and sends to Google. Google sends it back. miniAgoda verifies it matches. Prevents CSRF attacks on the OAuth flow.
+
 **Authorization Code** Short-lived, single-use code Google sends back. Meaningless on its own — must be exchanged for tokens server-side. Even if intercepted in the URL, useless without the client secret.
+
 **ID Token** A JWT from Google containing the user's identity. miniAgoda verifies its signature using Google's public keys.
 
 ### Spring Boot Implementation
